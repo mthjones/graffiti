@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use utils::*;
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
 pub struct TokenType(pub u32);
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
 pub struct State(pub u32);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -12,6 +12,55 @@ pub struct Token {
         pub value: Vec<u8>,
         pub t: TokenType,
         pub s: State
+}
+
+pub fn compile_states(transition_map: &str) -> HashMap<State, HashMap<TokenType, State>> {
+        let mut parsed_trans = HashMap::new();
+        for t in transition_map.lines() {
+                let v: Vec<&str> = t.split("=>").map(|s| s.trim()).collect();
+                if v[0].is_empty() {
+                        continue;
+                }
+                let v_bytes: Vec<u8> = v[0].bytes().collect();
+                let start_state: State = State(utils::get_hash_val(&v_bytes));
+                let tokens: Vec<&str> = v[1].split("|").map(|t| t.trim()).collect();
+                let v2_bytes: Vec<u8> = v[2].bytes().collect();
+                let end_state: State = State(utils::get_hash_val(&v2_bytes));
+
+                let x = parsed_trans.entry(start_state).or_insert(HashMap::new());
+                for t in tokens {
+                        let t_bytes: Vec<u8> = t.bytes().collect();
+                        let token_type = TokenType(utils::get_hash_val(&t_bytes));
+                        (*x).entry(token_type).or_insert(end_state.to_owned());
+                }
+        };
+        parsed_trans
+}
+
+pub fn compile_tokens_ascii(tokens: &str) -> HashMap<u8, TokenType> {
+        let mut token_map = HashMap::new();
+        for t in tokens.lines() {
+                let v: Vec<&str> = t.split("=>").map(|s| s.trim()).collect();
+                if v[0].is_empty() {
+                        continue;
+                }
+                let mut vals: Vec<u8> = Vec::new();
+                if v[1].contains("..") {
+                        let bounds: Vec<u8> = v[1].split("..").map(|c| c.parse::<u8>().unwrap()).collect();
+                        vals.append(&mut (bounds[0]..bounds[1]).collect());
+                } else if v[1].contains(',') {
+                        let mut nums: Vec<u8> = v[1].split(',').map(|i| i.parse::<u8>().unwrap()).collect();
+                        vals.append(&mut nums);
+                } else {
+                        let single_num = v[1].parse::<u8>().unwrap(); 
+                        vals.push(single_num);
+                }
+                let t_bytes: Vec<u8> = v[0].bytes().collect();
+                for u in vals {
+                        token_map.insert(u, TokenType(utils::get_hash_val(&t_bytes)));
+                }
+        };
+        token_map
 }
 
 pub struct Tokenizer {
@@ -22,119 +71,86 @@ pub struct Tokenizer {
 impl Tokenizer {
         pub fn new(token_map: &str, transition_map: &str) -> Self {
                 Tokenizer {
-                        token_map: Tokenizer::compile_tokens_ascii(token_map),
-                        transition_map: Tokenizer::compile_states(transition_map)
+                        token_map: compile_tokens_ascii(token_map),
+                        transition_map: compile_states(transition_map)
                 }
         }
-        pub fn compile_states(transition_map: &str) -> HashMap<State, HashMap<TokenType, State>> {
-                let mut parsed_trans = HashMap::new();
-                for t in transition_map.lines() {
-                        let v: Vec<&str> = t.split("=>").map(|s| s.trim()).collect();
-                        if v[0].is_empty() {
-                                continue;
-                        }
-                        let v_bytes: Vec<u8> = v[0].bytes().collect();
-                        let start_state: State = State(utils::get_hash_val(&v_bytes));
-                        let tokens: Vec<&str> = v[1].split("|").map(|t| t.trim()).collect();
-			let v2_bytes: Vec<u8> = v[2].bytes().collect();
-                        let end_state: State = State(utils::get_hash_val(&v2_bytes));
 
-                        let x = parsed_trans.entry(start_state).or_insert(HashMap::new());
-                        for t in tokens {
-				let t_bytes: Vec<u8> = t.bytes().collect();
-                                let token_type = TokenType(utils::get_hash_val(&t_bytes));
-                                (*x).entry(token_type).or_insert(end_state.to_owned());
-                        }
-                };
-                parsed_trans
-        }
-        pub fn compile_tokens_ascii(tokens: &str) -> HashMap<u8, TokenType> {
-                let mut token_map = HashMap::new();
-                for t in tokens.lines() {
-                        let v: Vec<&str> = t.split("=>").map(|s| s.trim()).collect();
-                        if v[0].is_empty() {
-                                continue;
-                        }
-                        let mut vals: Vec<u8> = Vec::new();
-                        if v[1].contains("..") {
-                                let bounds: Vec<u8> = v[1].split("..").map(|c| c.parse::<u8>().unwrap()).collect();
-                                vals.append(&mut (bounds[0]..bounds[1]).collect());
-                        } else if v[1].contains(',') {
-				let mut nums: Vec<u8> = v[1].split(',').map(|i| i.parse::<u8>().unwrap()).collect();
-                                vals.append(&mut nums);
-                        } else {
-                                let single_num = v[1].parse::<u8>().unwrap(); 
-                                vals.push(single_num);
-                        }
-                        let t_bytes: Vec<u8> = v[0].bytes().collect();
-                        for u in vals {
-                                token_map.insert(u, TokenType(utils::get_hash_val(&t_bytes)));
-                        }
-                };
-                token_map
-        }
         pub fn tokenize(&mut self, token_str: &[u8]) -> Vec<Token> {
-                let mut tokens: Vec<Token> = Vec::new();
+                let stream = TokenStream::new(token_str, &self.token_map, &self.transition_map);
 
-                let mut curr_token: Vec<u8> = Vec::new();
-                let mut raw_bytes = token_str.to_vec();
-                let mut curr_state = State(utils::get_hash_val(b"Start"));
-                let mut last_byte_t = TokenType(0);
+                stream.collect()
+        }
+}
 
-                while !raw_bytes.is_empty() {
-                        //println!("Byte: {:?}", raw_bytes[0]);
-                        //println!("curr_token: {:?}", curr_token);
-                        //println!("curr_state: {:?}", curr_state);
-                        //println!("tokens: {:?}", tokens);    
+pub struct TokenStream<'a, 'b> {
+        bytes: &'a [u8],
+        current_token_span: (usize, usize),
+        current_type: TokenType,
+        current_state: State,
+        token_map: &'b HashMap<u8, TokenType>,
+        transition_map: &'b HashMap<State, HashMap<TokenType, State>>
+}
 
-                        let curr_byte = raw_bytes[0];
-                        let curr_byte_t = match self.token_map.get(&curr_byte) {
-                                None => TokenType(0),
-                                Some(v) => v.to_owned()
-                        };
+impl<'a, 'b> TokenStream<'a, 'b> {
+        pub fn new(bytes: &'a [u8], token_map: &'b HashMap<u8, TokenType>, transition_map: &'b HashMap<State, HashMap<TokenType, State>>) -> Self {
+                TokenStream {
+                        bytes: bytes,
+                        current_token_span: (0, 0),
+                        current_type: TokenType(0),
+                        current_state: State(utils::get_hash_val(b"Start")),
+                        token_map: token_map,
+                        transition_map: transition_map
+                }
+        }
 
-                        let new_state = match self.transition_map.get(&curr_state).unwrap().get(&curr_byte_t) {
-                                None => {
-                                        let start_state = State(utils::get_hash_val(b"Start"));
-                                        let mut s = &curr_state;
-                                        if curr_byte_t != TokenType(0) {
-                                                tokens.push(Token { 
-                                                        t: last_byte_t.to_owned(), 
-                                                        s: curr_state.to_owned(),
-                                                        value: curr_token.to_owned()});
-                                                curr_token.clear();                                          
-                                                s = &start_state;
-                                        } else {
-                                                raw_bytes.remove(0);
-                                        };
-                                        s.to_owned()
-                                },
-                                Some(v) => {
-                                        if v == &curr_state && curr_state != State(utils::get_hash_val(b"Start")) {
-                                                curr_token.push(raw_bytes.remove(0));
-                                        }
-                                        if v != &curr_state && curr_state != State(utils::get_hash_val(b"Start")) {
-                                                tokens.push(Token { 
-                                                        t: last_byte_t.to_owned(), 
-                                                        s: curr_state.to_owned(),
-                                                        value: curr_token.to_owned()});
-                                                curr_token.clear();
-                                        };
-                                        v.to_owned()
-                                } 
-                        };
+        fn get_next_state(&self, token_type: TokenType) -> State {
+                match self.transition_map.get(&self.current_state).unwrap().get(&token_type) {
+                        Some(&v) => v,
+                        None => State(utils::get_hash_val(b"Start"))
+                }
+        }
 
-                        if raw_bytes.is_empty() {
-                                tokens.push(Token { 
-                                        t: curr_byte_t.to_owned(), 
-                                        s: new_state.to_owned(),
-                                        value: curr_token.to_owned() });
+        fn complete_token(&mut self) -> Token {
+                let (token_start, next_pos) = self.current_token_span;
+                self.current_token_span = (next_pos, next_pos);
+                Token {
+                        t: self.current_type,
+                        s: self.current_state,
+                        value: self.bytes[token_start..next_pos].to_vec()
+                }
+        }
+}
+
+impl<'a, 'b> Iterator for TokenStream<'a, 'b> {
+        type Item = Token;
+
+        fn next(&mut self) -> Option<Self::Item> {
+                loop {
+                        let (token_start, next_pos) = self.current_token_span;
+                        if next_pos == self.bytes.len() && token_start == next_pos {
+                                return None;
+                        } else if next_pos == self.bytes.len() {
+                                return Some(self.complete_token());
+                        }
+                        
+                        let next_byte = self.bytes[next_pos];
+                        if let Some(&next_token_type) = self.token_map.get(&next_byte) {
+                                let next_state = self.get_next_state(next_token_type);
+                                if self.current_state != next_state && self.current_state != State(utils::get_hash_val(b"Start")) {
+                                        let token = self.complete_token();
+                                        self.current_state = next_state;
+                                        self.current_type = next_token_type;
+                                        return Some(token);
+                                }
+                                if self.current_state == State(utils::get_hash_val(b"Start")) {
+                                        self.current_state = next_state;
+                                        self.current_type = next_token_type;
+                                }
                         }
 
-                        last_byte_t = curr_byte_t;
-                        curr_state = new_state;
-                };
-                tokens
+                        self.current_token_span = (token_start, next_pos + 1);
+                }
         }
 }
 
@@ -186,7 +202,7 @@ mod tests {
         #[test]
         fn test_compile_states() {
 
-                let transition_map: HashMap<State, HashMap<TokenType, State>> = Tokenizer::compile_states(&TRANSITIONS);
+                let transition_map: HashMap<State, HashMap<TokenType, State>> = compile_states(&TRANSITIONS);
 
                 let test_state_alpha = State(utils::get_hash_val(b"Alpha"));
                 let test_token_type_alpha = TokenType(utils::get_hash_val(b"Alpha"));
@@ -198,7 +214,7 @@ mod tests {
         #[test]
         fn test_compile_tokens() {
 
-                let token_map: HashMap<u8, TokenType> = Tokenizer::compile_tokens_ascii(&TOKENS);
+                let token_map: HashMap<u8, TokenType> = compile_tokens_ascii(&TOKENS);
                 let test_token_type_alpha = TokenType(utils::get_hash_val(b"Alpha"));
 
                 assert_eq!(token_map[&65], test_token_type_alpha);
@@ -291,6 +307,10 @@ mod tests {
                 let mut tokenizer = Tokenizer::new(&TOKENS, &TRANSITIONS);
 
                 let tokenized = tokenizer.tokenize(&BROWN_CA01.as_bytes().to_vec());
+
+                for (i, token) in tokenized.iter().enumerate() {
+                        // println!("Tokenized[{}]: {:?}", i, token);
+                }
 
                 assert_eq!(tokenized.len(), 110);
         }
